@@ -1,0 +1,8 @@
+What are the guidelines for using Amazon Web Services trademarks in deployment options documentation?
+
+How Amazon ECS let you control infrastructure and what deployment strategies it got for updating container images?
+
+What are the prerequisites for deploying an application to Amazon ECS?
+
+How does the Blue/Green deployment strategy work in AWS CodeDeploy?
+
