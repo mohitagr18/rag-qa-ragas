@@ -22,6 +22,10 @@ class Config:
     CHUNK_SIZE = 1000
     CHUNK_OVERLAP = 200
 
+    # LangSmith Settings (Optional: explicit validation)
+    LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING")
+    LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
+
     @staticmethod
     def validate():
         if not Config.OPENAI_API_KEY:
@@ -30,3 +34,5 @@ class Config:
             raise ValueError("QDRANT_URL is missing in .env")
         if not Config.QDRANT_API_KEY:
             raise ValueError("QDRANT_API_KEY is missing in .env")
+        if Config.LANGSMITH_TRACING == "true" and not Config.LANGSMITH_API_KEY:
+            print("⚠️ Warning: LangSmith tracing is enabled but no API Key found.")
