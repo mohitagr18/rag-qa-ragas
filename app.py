@@ -190,7 +190,7 @@ elif page == "2. Deep Evaluation (6 KPIs)":
     # --- DISPLAY RESULTS ---
     if "eval_results" in st.session_state:
         st.divider()
-        st.header("🏆 Evaluation Report Card")
+        st.header("🏆 RAG Evaluation Report Card")
         
         res = st.session_state.eval_results
         try: results_df = res.to_pandas()
