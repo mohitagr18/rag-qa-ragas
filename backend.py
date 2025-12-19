@@ -16,7 +16,7 @@ from langchain_core.output_parsers import StrOutputParser
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
-# Ragas 0.3.x Imports
+# Ragas Imports (v0.3.x)
 from ragas import evaluate, SingleTurnSample
 from ragas.testset import TestsetGenerator
 from ragas.llms import LangchainLLMWrapper
@@ -33,8 +33,19 @@ from ragas.metrics import (
 # Configuration
 from config import Config
 
+
 class RAGBackend:
+    """
+    Backend handler for RAG operations, including ingestion, retrieval, generation,
+    and evaluation using Ragas.
+    """
+
     def __init__(self):
+        """
+        Initialize the RAG Backend.
+        Sets up the OpenAI Embeddings, LLM, and Qdrant Client based on configuration.
+        Ensures the vector collection exists on startup.
+        """
         # Initialize Clients
         self.embeddings = OpenAIEmbeddings(
             model=Config.EMBEDDING_MODEL,
@@ -51,6 +62,10 @@ class RAGBackend:
         self._ensure_collection()
 
     def _ensure_collection(self):
+        """
+        Check if the configured Qdrant collection exists.
+        If it does not exist, create it with the correct vector configuration (Cosine Distance).
+        """
         collections = self.qdrant_client.get_collections()
         exists = any(c.name == Config.COLLECTION_NAME for c in collections.collections)
         
@@ -61,6 +76,22 @@ class RAGBackend:
             )
 
     def ingest_file(self, uploaded_file):
+        """
+        Process an uploaded PDF file and index it into the Vector Database.
+        
+        Steps:
+        1. Save uploaded file to a temporary location.
+        2. Load text using PyPDFLoader.
+        3. Split text into chunks using RecursiveCharacterTextSplitter.
+        4. Generate deterministic IDs (MD5 hash) for deduplication.
+        5. Add chunks to Qdrant.
+        
+        Args:
+            uploaded_file: Streamlit UploadedFile object.
+            
+        Returns:
+            int: The number of chunks successfully indexed.
+        """
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(uploaded_file.read())
             tmp_path = tmp_file.name
@@ -89,10 +120,25 @@ class RAGBackend:
             os.remove(tmp_path)
 
     def clear_database(self):
+        """
+        Delete the entire vector collection and recreate it empty.
+        Useful for resetting the knowledge base.
+        """
         self.qdrant_client.delete_collection(Config.COLLECTION_NAME)
         self._ensure_collection()
 
     def generate_test_data(self, file_path, num_questions=5):
+        """
+        Generate synthetic 'Golden Data' (Questions & Ground Truths) from a PDF.
+        Uses Ragas TestsetGenerator to create diverse questions (reasoning, multi-hop, etc.).
+        
+        Args:
+            file_path (str): Path to the source PDF file.
+            num_questions (int): Number of test cases to generate.
+            
+        Returns:
+            pd.DataFrame: A DataFrame containing the generated test set.
+        """
         loader = PyPDFLoader(file_path)
         documents = loader.load()
 
@@ -111,6 +157,16 @@ class RAGBackend:
         return dataset.to_pandas()
 
     def query_and_evaluate(self, question: str):
+        """
+        Perform a single-turn RAG operation (Retrieve -> Generate) and immediately
+        evaluate it using Ragas metrics (Faithfulness & Answer Relevancy).
+        
+        Args:
+            question (str): The user's input question.
+            
+        Returns:
+            dict: Contains 'answer', 'contexts', and 'metrics' (faithfulness/relevancy scores).
+        """
         # 1. Retrieval
         vector_store = QdrantVectorStore(
             client=self.qdrant_client,
@@ -159,6 +215,19 @@ class RAGBackend:
         }
 
     def run_batch_evaluation(self, test_df: pd.DataFrame):
+        """
+        Run a full RAGAS evaluation (6 KPIs) on a provided test dataset.
+        
+        The dataset must contain 'question' and 'ground_truth' columns.
+        The system will run the RAG pipeline for each question to generate 'answer' and 'contexts',
+        then compare them against the ground truth.
+        
+        Args:
+            test_df (pd.DataFrame): DataFrame with test questions and ground truths.
+            
+        Returns:
+            EvaluationResult: The Ragas evaluation result object containing all scores.
+        """
         # 1. Data Normalization
         df = test_df.copy()
         if 'user_input' in df.columns and 'question' not in df.columns:
@@ -211,7 +280,6 @@ class RAGBackend:
         eval_llm = LangchainLLMWrapper(self.llm)
         eval_embeddings = LangchainEmbeddingsWrapper(self.embeddings)
         
-        # THIS IS THE CRITICAL PART - Use Uppercase classes
         metrics = [
             Faithfulness(llm=eval_llm),
             ResponseRelevancy(llm=eval_llm, embeddings=eval_embeddings),

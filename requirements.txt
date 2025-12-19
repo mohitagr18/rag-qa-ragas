@@ -1,34 +1,26 @@
-# Core Framework
-fastapi
-uvicorn[standard]
-python-multipart
-
-# LangChain & AI
+# --- Core Framework ---
+streamlit
 langchain
+langchain-community
 langchain-openai
 langchain-qdrant
-langchain-community
-langchain-text-splitters
 
-# Vector Database
+# --- Vector DB ---
 qdrant-client
 
-# Document Processing
-pypdf
-python-docx
-
-# Configuration & Validation
-pydantic
-pydantic-settings
-python-dotenv
-
-# Logging & Monitoring
-structlog
-langsmith==0.4.55
-
-# HTTP Client
-httpx
-datasets
+# --- Evaluation ---
 ragas==0.3.7
-rapidfuzz
-streamlit
+rapidfuzz    # Required by Ragas for metrics
+
+# --- Utilities ---
+pydantic
+python-dotenv
+tiktoken     # Required by OpenAI embeddings
+pandas
+datasets     # Required by Ragas evaluation
+
+# --- Document Handling ---
+pypdf        # Required for PyPDFLoader
+
+# --- Monitoring ---
+langsmith==0.4.55
