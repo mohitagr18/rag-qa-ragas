@@ -276,7 +276,7 @@ class RAGBackend:
         }
         dataset = Dataset.from_dict(data)
 
-        # 4. Define Metrics (Classes Instantiated)
+        # 4. Define Metrics
         eval_llm = LangchainLLMWrapper(self.llm)
         eval_embeddings = LangchainEmbeddingsWrapper(self.embeddings)
         
