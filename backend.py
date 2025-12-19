@@ -1,24 +1,37 @@
+import os
+import tempfile
+import hashlib
+import pandas as pd
+from datasets import Dataset
+
+# LangChain Imports
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
-# FIXED IMPORT:
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from config import Config
-import tempfile
-import os
-import pandas as pd
-import hashlib
 
-# RAGAS 0.3.x Imports
+# Qdrant Imports
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
+
+# Ragas 0.3.x Imports
+from ragas import evaluate, SingleTurnSample
 from ragas.testset import TestsetGenerator
 from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
-from ragas import SingleTurnSample
-from ragas.metrics import Faithfulness, ResponseRelevancy
+from ragas.metrics import (
+    Faithfulness,
+    ResponseRelevancy,
+    ContextPrecision,
+    ContextRecall,
+    ContextEntityRecall,
+    NoiseSensitivity
+)
+
+# Configuration
+from config import Config
 
 class RAGBackend:
     def __init__(self):
@@ -38,7 +51,6 @@ class RAGBackend:
         self._ensure_collection()
 
     def _ensure_collection(self):
-        """Check if collection exists, else create it."""
         collections = self.qdrant_client.get_collections()
         exists = any(c.name == Config.COLLECTION_NAME for c in collections.collections)
         
@@ -49,7 +61,6 @@ class RAGBackend:
             )
 
     def ingest_file(self, uploaded_file):
-        """Process a PDF upload and index it."""
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(uploaded_file.read())
             tmp_path = tmp_file.name
@@ -64,8 +75,6 @@ class RAGBackend:
             )
             chunks = splitter.split_documents(docs)
 
-            # --- DEDUPLICATION LOGIC ---
-            # Generate deterministic IDs based on content hash
             ids = [hashlib.md5(d.page_content.encode("utf-8")).hexdigest() for d in chunks]
 
             vector_store = QdrantVectorStore(
@@ -74,6 +83,7 @@ class RAGBackend:
                 embedding=self.embeddings
             )
             vector_store.add_documents(chunks, ids=ids)
+            
             return len(chunks)
         finally:
             os.remove(tmp_path)
@@ -83,7 +93,6 @@ class RAGBackend:
         self._ensure_collection()
 
     def generate_test_data(self, file_path, num_questions=5):
-        """Generate synthetic test data using Ragas 0.3.x"""
         loader = PyPDFLoader(file_path)
         documents = loader.load()
 
@@ -102,7 +111,6 @@ class RAGBackend:
         return dataset.to_pandas()
 
     def query_and_evaluate(self, question: str):
-        """Retrieve, Generate, and Evaluate (Single Turn)"""
         # 1. Retrieval
         vector_store = QdrantVectorStore(
             client=self.qdrant_client,
@@ -128,6 +136,7 @@ class RAGBackend:
         eval_llm = LangchainLLMWrapper(self.llm)
         eval_embeddings = LangchainEmbeddingsWrapper(self.embeddings)
         
+        # Instantiate Metrics (Use Uppercase Class Names)
         faith_metric = Faithfulness(llm=eval_llm)
         relevancy_metric = ResponseRelevancy(llm=eval_llm, embeddings=eval_embeddings)
         
@@ -137,7 +146,6 @@ class RAGBackend:
             retrieved_contexts=retrieved_contexts
         )
         
-        # Async methods are preferred but .single_turn_score() is the sync wrapper in 0.3.x
         faith_score = faith_metric.single_turn_score(sample)
         rel_score = relevancy_metric.single_turn_score(sample)
 
@@ -149,3 +157,74 @@ class RAGBackend:
                 "answer_relevancy": rel_score
             }
         }
+
+    def run_batch_evaluation(self, test_df: pd.DataFrame):
+        # 1. Data Normalization
+        df = test_df.copy()
+        if 'user_input' in df.columns and 'question' not in df.columns:
+            df = df.rename(columns={'user_input': 'question'})
+        if 'reference' in df.columns and 'ground_truth' not in df.columns:
+            df = df.rename(columns={'reference': 'ground_truth'})
+            
+        if 'question' not in df.columns:
+            raise ValueError(f"Dataset missing 'question' column. Found: {df.columns}")
+        if 'ground_truth' not in df.columns:
+            raise ValueError(f"Dataset missing 'ground_truth' column. Found: {df.columns}")
+
+        # 2. Run Pipeline (Retrieval + Generation)
+        questions = df['question'].tolist()
+        ground_truths = df['ground_truth'].tolist()
+        answers = []
+        contexts = []
+
+        vector_store = QdrantVectorStore(
+            client=self.qdrant_client,
+            collection_name=Config.COLLECTION_NAME,
+            embedding=self.embeddings
+        )
+        retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+        
+        template = "Answer the question based ONLY on the following context:\n{context}\n\nQuestion: {question}"
+        prompt = ChatPromptTemplate.from_template(template)
+        chain = prompt | self.llm | StrOutputParser()
+
+        for q in questions:
+            docs = retriever.invoke(q)
+            retrieved_txts = [d.page_content for d in docs]
+            context_str = "\n\n".join(retrieved_txts)
+            
+            ans = chain.invoke({"context": context_str, "question": q})
+            
+            answers.append(ans)
+            contexts.append(retrieved_txts)
+
+        # 3. Create Dataset for Ragas
+        data = {
+            "user_input": questions,
+            "response": answers,
+            "retrieved_contexts": contexts,
+            "reference": ground_truths
+        }
+        dataset = Dataset.from_dict(data)
+
+        # 4. Define Metrics (Classes Instantiated)
+        eval_llm = LangchainLLMWrapper(self.llm)
+        eval_embeddings = LangchainEmbeddingsWrapper(self.embeddings)
+        
+        # THIS IS THE CRITICAL PART - Use Uppercase classes
+        metrics = [
+            Faithfulness(llm=eval_llm),
+            ResponseRelevancy(llm=eval_llm, embeddings=eval_embeddings),
+            ContextPrecision(llm=eval_llm),
+            ContextRecall(llm=eval_llm),
+            ContextEntityRecall(llm=eval_llm),
+            NoiseSensitivity(llm=eval_llm)
+        ]
+
+        # 5. Execute Evaluation
+        results = evaluate(
+            dataset=dataset,
+            metrics=metrics
+        )
+        
+        return results
