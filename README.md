@@ -47,7 +47,6 @@ rag-qa-ragas/
 ├── questions.txt          # ❓ List of sample/test questions for the demo
 ├── .env.example           # 🔐 Environment variables (API Keys)
 ├── requirements.txt       # 📦 Production dependencies
-└── requirements-dev.txt   # 🧪 Development/Testing dependencies
 ```
 
 ---
